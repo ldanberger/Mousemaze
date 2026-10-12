@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box;height:100%}</style>
+</head><body>
+<title>Mouse Maze</title>
+<style>
+/* Layout: one-screen toy — counters on top, the maze board filling the middle, tool selector and grid controls below. Single committed look: pine board, walnut walls. */
+:root{
+  --bg:#1a1612;        /* dark table */
+  --panel:#26201a;
+  --line:#463a2c;
+  --ink:#f4ead9;
+  --muted:#bfae95;
+  --accent:#f2b84b;    /* cheese yellow */
+  --display:"Fredoka", system-ui, sans-serif;
+  --body:"Nunito Sans", system-ui, -apple-system, sans-serif;
+  color-scheme:dark;
+}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+.app{height:100%;display:flex;flex-direction:column;gap:10px;padding-block:10px;padding-inline:16px;box-sizing:border-box;max-width:640px;margin:0 auto}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px}
+h1{font-family:var(--display);font-weight:600;font-size:1.5rem;margin:0;letter-spacing:.01em}
+h1 .ver{font-family:var(--body);font-size:.6rem;font-weight:600;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:1px 5px;margin-left:6px;vertical-align:middle}
+.stats{display:flex;gap:14px;font-size:.8rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.stats b{color:var(--ink);font-size:1rem}
+.stage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
+canvas{display:block;border-radius:8px;touch-action:none;box-shadow:0 0 0 6px #5a3a1e,0 0 0 8px #2e1d0e,0 16px 36px rgba(0,0,0,.55)}
+.tools{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.tools button{background:transparent;border:0;color:var(--muted);font:700 .95rem var(--body);padding:11px 4px;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer}
+.tools button[aria-pressed="true"]{background:var(--accent);color:#2b1d05}
+.tools svg{width:20px;height:20px}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.size{display:flex;align-items:center;gap:6px}
+.size span{min-width:62px;text-align:center;font-size:.85rem;color:var(--muted)}
+.size b{color:var(--ink);font-variant-numeric:tabular-nums}
+button.ctl{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;font:700 1rem var(--body);padding:9px 14px;cursor:pointer;touch-action:manipulation}
+button.ctl:disabled{opacity:.35}
+button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.hint{font-size:.72rem;color:var(--muted);text-align:center;min-height:1.2em}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600&family=Nunito+Sans:wght@400;600;700&display=swap">
+
+<div class="app">
+  <header>
+    <h1>Mouse Maze<span class="ver">v1.0</span></h1>
+    <div class="stats">
+      <span>Mice <b id="nMice">1</b></span>
+      <span>Cheese <b id="nCheese">1</b></span>
+      <span>Eaten <b id="nEaten">0</b></span>
+    </div>
+  </header>
+  <div class="stage" id="stage"><canvas id="c" aria-label="Maze. Tap to place the selected item."></canvas></div>
+  <div class="hint" id="hint">Pick Wall, Cheese or Mouse, then tap the maze</div>
+  <div class="tools" role="group" aria-label="What to place">
+    <button data-tool="wall" aria-pressed="true"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14v4H3zM3 12h14v4H3z" fill="currentColor"/></svg>Wall</button>
+    <button data-tool="cheese" aria-pressed="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 14 17 5v9z" fill="currentColor"/><circle cx="12" cy="11" r="1.5" fill="#2b1d05" opacity=".5"/></svg>Cheese</button>
+    <button data-tool="mouse" aria-pressed="false"><svg viewBox="0 0 20 20" aria-hidden="true"><ellipse cx="9" cy="11" rx="6" ry="4" fill="currentColor"/><circle cx="14" cy="7" r="2.4" fill="currentColor"/><path d="M3 11q-3 2 -1 5" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>Mouse</button>
+  </div>
+  <div class="row">
+    <div class="size">
+      <button class="ctl" id="smaller" aria-label="Smaller grid">−</button>
+      <span>Grid <b id="sizeVal">8</b></span>
+      <button class="ctl" id="bigger" aria-label="Larger grid">+</button>
+    </div>
+    <button class="ctl" id="resetBtn">New maze</button>
+  </div>
+</div>
+
+<script>
+(() => {
+const $=id=>document.getElementById(id);
+const cv=$('c'), ctx=cv.getContext('2d');
+const store={get(k,d){try{const v=localStorage.getItem('mousemaze.'+k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem('mousemaze.'+k,JSON.stringify(v))}catch(e){}}};
+
+// ---------- state ----------
+let N=Math.min(24,Math.max(4,store.get('size',8)));   // cells across
+let cols, rows, cell, W, H;
+let hWall, vWall;      // hWall[r][c]: wall on the top edge of row r (r=0..rows); vWall[r][c]: wall on the left edge of col c (c=0..cols)
+let cheeses=[], mice=[], eaten=0, tool='wall', clock=0, crumbs=[];
+const FUR=['#9a9aa3','#b9a48a','#e9e4dc','#7e6a58','#c4c0b8'];
+
+// ---------- maze ----------
+function sizeGrid(){
+  const st=$('stage').getBoundingClientRect();
+  const aspect = st.height/Math.max(1,st.width);
+  cols=N; rows=Math.max(4,Math.min(40,Math.round(N*aspect)));
+  cell=Math.floor(Math.min((st.width-16)/cols,(st.height-16)/rows));
+  W=cell*cols; H=cell*rows;
+  const dpr=window.devicePixelRatio||1;
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+function randomMaze(){
+  hWall=Array.from({length:rows+1},()=>Array(cols).fill(true));
+  vWall=Array.from({length:rows},()=>Array(cols+1).fill(true));
+  const seen=Array.from({length:rows},()=>Array(cols).fill(false));
+  const stack=[[Math.random()*rows|0, Math.random()*cols|0]]; seen[stack[0][0]][stack[0][1]]=true;
+  while(stack.length){
+    const [r,c]=stack[stack.length-1];
+    const nb=[[r-1,c],[r+1,c],[r,c-1],[r,c+1]].filter(([y,x])=>y>=0&&y<rows&&x>=0&&x<cols&&!seen[y][x]);
+    if(!nb.length){ stack.pop(); continue; }
+    const [y,x]=nb[Math.random()*nb.length|0];
+    openWall(r,c,y,x); seen[y][x]=true; stack.push([y,x]);
+  }
+  // knock out a few extra walls so there are loops to wander
+  for(let i=0;i<Math.round(cols*rows*0.08);i++){
+    const r=Math.random()*rows|0, c=Math.random()*cols|0;
+    if(Math.random()<.5 && c<cols-1) vWall[r][c+1]=false; else if(r<rows-1) hWall[r+1][c]=false;
+  }
+}
+function openWall(r,c,y,x){
+  if(y===r-1) hWall[r][c]=false; else if(y===r+1) hWall[r+1][c]=false;
+  else if(x===c-1) vWall[r][c]=false; else vWall[r][c+1]=false;
+}
+function blocked(r,c,y,x){
+  if(y<0||y>=rows||x<0||x>=cols) return true;
+  if(y===r-1) return hWall[r][c]; if(y===r+1) return hWall[r+1][c];
+  if(x===c-1) return vWall[r][c]; return vWall[r][c+1];
+}
+const randCell=()=>[Math.random()*rows|0, Math.random()*cols|0];
+
+// ---------- mice ----------
+function addMouse(r,c){
+  mice.push({fr:r,fc:c,tr:r,tc:c,p:1,speed:1.2+Math.random()*3,   // cells per second, random per mouse
+    fur:FUR[Math.random()*FUR.length|0], ang:Math.random()*6.28, bump:0, chew:0});
+}
+function chooseNext(m){
+  const r=m.tr, c=m.tc;
+  let opts=[[r-1,c],[r+1,c],[r,c-1],[r,c+1]].filter(([y,x])=>!blocked(r,c,y,x));
+  if(!opts.length){ m.fr=r; m.fc=c; m.p=1; return; }       // walled in: wait
+  if(opts.length>1) opts=opts.filter(([y,x])=>!(y===m.fr&&x===m.fc));   // don't double back unless it's a dead end
+  const [y,x]=opts[Math.random()*opts.length|0];
+  m.fr=r; m.fc=c; m.tr=y; m.tc=x; m.p=0;
+  m.ang=Math.atan2(y-r,x-c);
+}
+function reverse(m){
+  [m.fr,m.tr]=[m.tr,m.fr]; [m.fc,m.tc]=[m.tc,m.fc];
+  m.p=1-m.p; m.ang=Math.atan2(m.tr-m.fr,m.tc-m.fc); m.bump=0.35;
+}
+const pos=m=>({r:m.fr+(m.tr-m.fr)*m.p, c:m.fc+(m.tc-m.fc)*m.p});
+
+function update(dt){
+  clock+=dt;
+  for(const m of mice){
+    if(m.bump>0) m.bump-=dt;
+    if(m.chew>0){ m.chew-=dt; continue; }
+    // a wall dropped in front of a moving mouse turns it around
+    if(m.p<1 && blocked(m.fr,m.fc,m.tr,m.tc)) reverse(m);
+    if(m.p<1){ m.p=Math.min(1,m.p+m.speed*dt); }
+    if(m.p>=1){
+      const i=cheeses.findIndex(([r,c])=>r===m.tr&&c===m.tc);
+      if(i>=0){
+        cheeses.splice(i,1); eaten++; m.chew=0.6; stats();
+        for(let k=0;k<8;k++) crumbs.push({x:(m.tc+.5)*cell,y:(m.tr+.5)*cell,vx:(Math.random()-.5)*cell*3,vy:(Math.random()-.5)*cell*3,t:.6});
+        continue;
+      }
+      chooseNext(m);
+    }
+  }
+  // two mice bumping into each other both turn around
+  for(let i=0;i<mice.length;i++) for(let j=i+1;j<mice.length;j++){
+    const a=mice[i], b=mice[j];
+    if(a.bump>0||b.bump>0||a.chew>0||b.chew>0) continue;
+    const pa=pos(a), pb=pos(b);
+    if(Math.hypot(pa.r-pb.r,pa.c-pb.c)<0.55){ reverse(a); reverse(b); }
+  }
+  crumbs=crumbs.filter(k=>(k.t-=dt)>0); for(const k of crumbs){ k.x+=k.vx*dt; k.y+=k.vy*dt; }
+}
+
+// ---------- drawing ----------
+function draw(){
+  // pine board
+  const g=ctx.createLinearGradient(0,0,W,H); g.addColorStop(0,'#e9cf9f'); g.addColorStop(1,'#d8b57c');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='rgba(120,80,40,.10)'; ctx.lineWidth=1;
+  for(let y=0;y<H;y+=6){ ctx.beginPath(); ctx.moveTo(0,y+Math.sin(y*.05)*2); ctx.bezierCurveTo(W*.3,y+3,W*.7,y-3,W,y+Math.cos(y*.04)*2); ctx.stroke(); }
+  // faint grid dots so placement spots are visible
+  ctx.fillStyle='rgba(90,58,30,.25)';
+  for(let r=0;r<=rows;r++) for(let c=0;c<=cols;c++){ ctx.beginPath(); ctx.arc(c*cell,r*cell,Math.max(1,cell*.04),0,7); ctx.fill(); }
+  // cheese
+  for(const [r,c] of cheeses) drawCheese((c+.5)*cell,(r+.5)*cell,cell*.36);
+  // walls
+  const t=Math.max(3,cell*.13);
+  ctx.lineCap='round'; ctx.lineWidth=t;
+  ctx.strokeStyle='rgba(0,0,0,.22)'; strokeWalls(1.5,2.5);
+  ctx.strokeStyle='#5a3a1e'; strokeWalls(0,0);
+  // crumbs
+  ctx.fillStyle='#f2b84b'; for(const k of crumbs){ ctx.globalAlpha=k.t/.6; ctx.fillRect(k.x,k.y,cell*.06,cell*.06); } ctx.globalAlpha=1;
+  // mice
+  for(const m of mice) drawMouse(m);
+}
+function strokeWalls(ox,oy){
+  ctx.beginPath();
+  for(let r=0;r<=rows;r++) for(let c=0;c<cols;c++) if(hWall[r][c]){ ctx.moveTo(c*cell+ox,r*cell+oy); ctx.lineTo((c+1)*cell+ox,r*cell+oy); }
+  for(let r=0;r<rows;r++) for(let c=0;c<=cols;c++) if(vWall[r][c]){ ctx.moveTo(c*cell+ox,r*cell+oy); ctx.lineTo(c*cell+ox,(r+1)*cell+oy); }
+  ctx.stroke();
+}
+function drawCheese(x,y,s){
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle='rgba(0,0,0,.18)'; ctx.beginPath(); ctx.moveTo(-s+2,s*.55+3); ctx.lineTo(s+2,-s*.35+3); ctx.lineTo(s+2,s*.55+3); ctx.fill();
+  ctx.fillStyle='#f2b84b'; ctx.beginPath(); ctx.moveTo(-s,s*.55); ctx.lineTo(s,-s*.35); ctx.lineTo(s,s*.55); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#ffd77a'; ctx.beginPath(); ctx.moveTo(-s,s*.55); ctx.lineTo(s,-s*.35); ctx.lineTo(s,-s*.15); ctx.lineTo(-s*.7,s*.55); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#c98a1e';
+  ctx.beginPath(); ctx.arc(s*.45,s*.2,s*.13,0,7); ctx.arc(s*.1,s*.38,s*.09,0,7); ctx.arc(s*.72,s*.38,s*.07,0,7); ctx.fill();
+  ctx.restore();
+}
+function drawMouse(m){
+  const p=pos(m), x=(p.c+.5)*cell, y=(p.r+.5)*cell, s=cell*.3;
+  const moving=m.p<1, wig=moving?Math.sin(clock*20*m.speed/2):Math.sin(clock*3)*.3;
+  ctx.save(); ctx.translate(x,y); ctx.rotate(m.ang);
+  // tail
+  ctx.strokeStyle='#d9a0a0'; ctx.lineWidth=Math.max(1.2,s*.12); ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(-s*.9,0); ctx.quadraticCurveTo(-s*1.5,wig*s*.6,-s*2,-wig*s*.3); ctx.stroke();
+  // body
+  ctx.fillStyle='rgba(0,0,0,.2)'; ctx.beginPath(); ctx.ellipse(s*.05,s*.12,s*1.0,s*.62,0,0,7); ctx.fill();
+  ctx.fillStyle=m.fur; ctx.beginPath(); ctx.ellipse(0,0,s*.95,s*.58,0,0,7); ctx.fill();
+  // head
+  ctx.beginPath(); ctx.ellipse(s*.85,0,s*.5,s*.38,0,0,7); ctx.fill();
+  // ears
+  ctx.fillStyle='#f0b8bf'; for(const sy of [-1,1]){ ctx.beginPath(); ctx.arc(s*.6,sy*s*.42,s*.24,0,7); ctx.fill(); }
+  ctx.strokeStyle=m.fur; ctx.lineWidth=Math.max(1,s*.06); for(const sy of [-1,1]){ ctx.beginPath(); ctx.arc(s*.6,sy*s*.42,s*.24,0,7); ctx.stroke(); }
+  // nose, eyes, whiskers
+  ctx.fillStyle='#e07a8a'; ctx.beginPath(); ctx.arc(s*1.32,0,s*.1,0,7); ctx.fill();
+  ctx.fillStyle='#1d1410'; for(const sy of [-1,1]){ ctx.beginPath(); ctx.arc(s*.98,sy*s*.17,s*.07,0,7); ctx.fill(); }
+  ctx.strokeStyle='rgba(40,30,20,.55)'; ctx.lineWidth=.8;
+  const tw=m.chew>0?Math.sin(clock*40)*s*.06:0;
+  for(const sy of [-1,1]) for(const k of [-.15,.15]){ ctx.beginPath(); ctx.moveTo(s*1.2,sy*s*.05); ctx.lineTo(s*1.65,sy*(s*.25)+k*s+tw); ctx.stroke(); }
+  ctx.restore();
+}
+
+// ---------- editing ----------
+function nearestEdge(px,py){
+  const c=Math.min(cols-1,Math.max(0,Math.floor(px/cell))), r=Math.min(rows-1,Math.max(0,Math.floor(py/cell)));
+  const lx=px-c*cell, ly=py-r*cell;
+  const d=[['top',ly],['bottom',cell-ly],['left',lx],['right',cell-lx]].sort((a,b)=>a[1]-b[1])[0][0];
+  if(d==='top') return {kind:'h',r,c};
+  if(d==='bottom') return {kind:'h',r:r+1,c};
+  if(d==='left') return {kind:'v',r,c};
+  return {kind:'v',r,c:c+1};
+}
+const isBorder=e=> e.kind==='h' ? (e.r===0||e.r===rows) : (e.c===0||e.c===cols);
+const getEdge=e=> e.kind==='h' ? hWall[e.r][e.c] : vWall[e.r][e.c];
+const setEdge=(e,v)=>{ if(e.kind==='h') hWall[e.r][e.c]=v; else vWall[e.r][e.c]=v; };
+let drag=null;
+function pointAt(e){ const b=cv.getBoundingClientRect(); return [e.clientX-b.left, e.clientY-b.top]; }
+cv.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  const [px,py]=pointAt(e);
+  if(tool==='wall'){
+    const ed=nearestEdge(px,py);
+    if(isBorder(ed)){ hint('The outside border stays put'); return; }
+    const v=!getEdge(ed); setEdge(ed,v);
+    drag={paint:v, last:ed.kind+ed.r+','+ed.c};       // keep drawing (or erasing) as the finger moves
+    try{cv.setPointerCapture(e.pointerId)}catch(_){}
+    hint(v?'Wall added: drag to keep drawing':'Wall removed: drag to keep erasing');
+    return;
+  }
+  const c=Math.floor(px/cell), r=Math.floor(py/cell);
+  if(r<0||r>=rows||c<0||c>=cols) return;
+  if(tool==='cheese'){
+    const i=cheeses.findIndex(([y,x])=>y===r&&x===c);
+    if(i>=0){ cheeses.splice(i,1); hint('Cheese removed'); } else { cheeses.push([r,c]); hint('Cheese placed'); }
+  } else if(tool==='mouse'){
+    const i=mice.findIndex(m=>{ const p=pos(m); return Math.hypot(p.r-r,p.c-c)<0.6; });
+    if(i>=0){ mice.splice(i,1); hint('Mouse removed'); } else { addMouse(r,c); hint('Mouse added with a random speed'); }
+  }
+  stats();
+});
+cv.addEventListener('pointermove',e=>{
+  if(!drag) return;
+  const [px,py]=pointAt(e); const ed=nearestEdge(px,py); const k=ed.kind+ed.r+','+ed.c;
+  if(k===drag.last || isBorder(ed)) return;
+  drag.last=k; setEdge(ed,drag.paint);
+});
+const endDrag=()=>{ drag=null; };
+cv.addEventListener('pointerup',endDrag); cv.addEventListener('pointercancel',endDrag);
+
+let hintT=0;
+function hint(t){ $('hint').textContent=t; clearTimeout(hintT); hintT=setTimeout(()=>{ $('hint').textContent='Pick Wall, Cheese or Mouse, then tap the maze'; },2200); }
+function stats(){ $('nMice').textContent=mice.length; $('nCheese').textContent=cheeses.length; $('nEaten').textContent=eaten; }
+
+document.querySelectorAll('.tools button').forEach(b=>b.addEventListener('click',()=>{
+  tool=b.dataset.tool;
+  document.querySelectorAll('.tools button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
+  hint(tool==='wall'?'Tap a grid line to add or remove a wall':tool==='cheese'?'Tap a square to place or remove cheese':'Tap a square to add a mouse, or tap a mouse to remove it');
+}));
+
+// ---------- new maze / size ----------
+function newMaze(keepMice){
+  const count=keepMice?Math.max(1,mice.length):1;
+  sizeGrid(); randomMaze();
+  cheeses=[randCell()];
+  mice=[]; for(let i=0;i<count;i++){ const [r,c]=randCell(); addMouse(r,c); }
+  // keep the first cheese away from the first mouse
+  const m=mice[0]; let tries=0;
+  while(tries++<20 && Math.abs(cheeses[0][0]-m.tr)+Math.abs(cheeses[0][1]-m.tc) < Math.max(cols,rows)/2) cheeses[0]=randCell();
+  $('sizeVal').textContent=N;
+  $('smaller').disabled=N<=4; $('bigger').disabled=N>=24;
+  stats();
+}
+$('resetBtn').onclick=()=>newMaze(true);
+$('smaller').onclick=()=>{ if(N>4){ N--; store.set('size',N); newMaze(true); } };
+$('bigger').onclick =()=>{ if(N<24){ N++; store.set('size',N); newMaze(true); } };
+addEventListener('resize',()=>{ // keep the maze, just rescale it
+  const st=$('stage').getBoundingClientRect();
+  cell=Math.floor(Math.min((st.width-16)/cols,(st.height-16)/rows)); W=cell*cols; H=cell*rows;
+  const dpr=window.devicePixelRatio||1; cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px'; ctx.setTransform(dpr,0,0,dpr,0,0);
+});
+
+let last=performance.now();
+function frame(now){ const dt=Math.min(.05,(now-last)/1000); last=now; update(dt); draw(); requestAnimationFrame(frame); }
+newMaze(false);
+requestAnimationFrame(frame);
+})();
+</script>
+
+</body></html>
